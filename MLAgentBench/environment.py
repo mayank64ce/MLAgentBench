@@ -18,9 +18,18 @@ from dacite import from_dict
 
 from .low_level_actions import LOW_LEVEL_ACTIONS
 from .high_level_actions import HIGH_LEVEL_ACTIONS
-from .schema import Step, Trace, EnvException, TooLongPromptError, LLMError, EnhancedJSONEncoder 
+from .schema import Step, Trace, EnvException, TooLongPromptError, LLMError, EnhancedJSONEncoder
 from .LLM import complete_text_claude
 from .prepare_task import prepare_task, get_task_info
+
+# FHE imports (optional, only used when --challenge-dir is provided)
+try:
+    from .fhe import parse_challenge, FHEChallengeSpec
+    from .fhe.fhe_actions import FHE_ACTIONS
+    from .fhe.interpreters import create_interpreter
+    FHE_AVAILABLE = True
+except ImportError:
+    FHE_AVAILABLE = False
 
 class TimeoutException(Exception): pass
 
@@ -48,7 +57,20 @@ class Environment:
         self._log_dir = os.path.join(args.log_dir, "env_log")
         self._setup_log_dir()
 
-        if not args.interactive:
+        # FHE-specific attributes
+        self._fhe_spec = None
+        self._fhe_interpreter = None
+        self._is_fhe_task = False
+
+        # Check if this is an FHE challenge (--challenge-dir provided)
+        challenge_dir = getattr(args, 'challenge_dir', None)
+
+        if challenge_dir and not args.interactive:
+            # FHE challenge from external directory
+            self._is_fhe_task = True
+            self._initialize_fhe_env(challenge_dir)
+
+        elif not args.interactive:
             self._benchmark_folder_name, self._research_problem = get_task_info(args.task)
             self._work_dir = os.path.join(args.work_dir, self.benchmark_folder_name)
             self._read_only_files = []
@@ -66,7 +88,13 @@ class Environment:
 
             self._initialize_interactive_env() # set up work dir and log dir
 
-        self._action_infos =  {t.name: t for t in LOW_LEVEL_ACTIONS + HIGH_LEVEL_ACTIONS}
+        # Set up actions
+        self._action_infos = {t.name: t for t in LOW_LEVEL_ACTIONS + HIGH_LEVEL_ACTIONS}
+
+        # Add FHE actions if this is an FHE task
+        if self._is_fhe_task and FHE_AVAILABLE:
+            for action in FHE_ACTIONS:
+                self._action_infos[action.name] = action
 
         if not args.interactive:
             del self._action_infos["Request Help"]
@@ -79,6 +107,12 @@ class Environment:
             "read_only_files": self.read_only_files,
             "research_problem": self.research_problem,
         }
+
+        # Add FHE-specific context for tools
+        if self._is_fhe_task:
+            self._static_kwargs_for_tools["fhe_spec"] = self._fhe_spec
+            self._static_kwargs_for_tools["fhe_interpreter"] = self._fhe_interpreter
+
         self._trace = self._initialize_trace()
         self._start_time = time.time()
 
@@ -188,6 +222,74 @@ class Environment:
             if not os.path.exists(os.path.join(work_dir, "backup")):
                 os.mkdir(os.path.join(work_dir, "backup"))
 
+    def _initialize_fhe_env(self, challenge_dir):
+        """Initialize environment for an FHE challenge from external directory."""
+        from pathlib import Path
+
+        if not FHE_AVAILABLE:
+            raise ImportError("FHE support not available. Install FHE dependencies.")
+
+        challenge_path = Path(challenge_dir).resolve()
+        if not challenge_path.exists():
+            raise ValueError(f"Challenge directory not found: {challenge_dir}")
+
+        # Parse challenge
+        self._fhe_spec = parse_challenge(challenge_path)
+
+        # Set benchmark folder name from challenge
+        self._benchmark_folder_name = self._fhe_spec.task or challenge_path.name
+        self._work_dir = os.path.join(self._args.work_dir, self._benchmark_folder_name)
+
+        # Generate research problem from spec
+        self._research_problem = self._fhe_spec.generate_research_problem()
+
+        # Create workspace directory
+        if os.path.exists(self._work_dir):
+            shutil.rmtree(self._work_dir)
+        os.makedirs(self._work_dir)
+
+        # Copy template files to workspace
+        if self._fhe_spec.template_dir and self._fhe_spec.template_dir.exists():
+            for f in self._fhe_spec.template_dir.iterdir():
+                if f.is_file():
+                    shutil.copy2(f, os.path.join(self._work_dir, f.name))
+
+        # Copy challenge.md to workspace for reference
+        challenge_md = challenge_path / "challenge.md"
+        if challenge_md.exists():
+            shutil.copy2(challenge_md, os.path.join(self._work_dir, "challenge.md"))
+
+        # Set read-only files (challenge.md should not be modified)
+        self._read_only_files = ["challenge.md"]
+
+        # Create interpreter
+        build_timeout = getattr(self._args, 'docker_build_timeout', 300)
+        run_timeout = getattr(self._args, 'docker_timeout', 600)
+
+        # Use workspace as interpreter workspace
+        interpreter_workspace = Path(self._work_dir) / ".fhe_workspace"
+        interpreter_workspace.mkdir(parents=True, exist_ok=True)
+
+        self._fhe_interpreter = create_interpreter(
+            self._fhe_spec,
+            interpreter_workspace,
+            build_timeout=build_timeout,
+            run_timeout=run_timeout
+        )
+
+        # Create backup folder
+        backup_dir = os.path.join(self._work_dir, "backup")
+        if os.path.exists(backup_dir):
+            shutil.rmtree(backup_dir)
+        os.mkdir(backup_dir)
+
+        # Save challenge spec to log dir
+        spec_file = os.path.join(self._log_dir, "challenge_spec.json")
+        self._fhe_spec.save(Path(spec_file))
+
+        print(f"FHE Challenge: {self._fhe_spec.challenge_name}")
+        print(f"Type: {self._fhe_spec.challenge_type.value}")
+        print(f"Scheme: {self._fhe_spec.scheme.value}")
 
     def _initialize_interactive_env(self):
         # set up read only files

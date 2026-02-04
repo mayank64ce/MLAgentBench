@@ -21,11 +21,14 @@ python -u -m MLAgentBench.runner --python $(which python) --task <task_name> --d
 
 Key runner arguments:
 - `--task`: Task name (matches benchmark folder or tasks.json entry)
+- `--challenge-dir`: Path to external FHE challenge directory (for FHE mode)
 - `--agent-type`: Agent class (`ResearchAgent`, `Agent`, `AutoGPTAgent`, `ReasoningActionAgent`, `LangChainAgent`)
 - `--llm-name`, `--fast-llm-name`, `--edit-script-llm-name`: LLM models to use
 - `--retrieval`: Enable retrieval-augmented mode for ResearchAgent
 - `--max-steps`: Maximum agent steps (default 50)
 - `--max-time`: Maximum time in seconds (default 5 hours)
+- `--docker-timeout`: Docker execution timeout for FHE challenges (default 600s)
+- `--docker-build-timeout`: Docker build timeout for FHE challenges (default 300s)
 
 ### Prepare a Task Dataset
 ```bash
@@ -74,6 +77,25 @@ Each task folder contains:
 - `scripts/`: Hidden files - `prepare.py` (data download), `eval.py` (evaluation), `research_problem.txt`, `read_only_files.txt`
 
 Available tasks: cifar10, imdb, house-price, spaceship-titanic, feedback, identify-contrails, fathomnet, amp-parkinsons-disease-progression-prediction, CLRS, ogbn-arxiv, vectorization, llama-inference, babylm, bibtex-generation, literature-review-tool
+
+### FHE Challenges (`MLAgentBench/fhe/`)
+
+FHE (Fully Homomorphic Encryption) challenge support allows running external challenges via Docker:
+
+- **challenge_parser.py**: Parses challenge.md into FHEChallengeSpec
+- **fhe_actions.py**: FHE-specific actions (Execute FHE Solution, Validate FHE Output, Understand FHE Challenge)
+- **interpreters/**: Docker-based executors
+  - `base.py`: BaseInterpreter with Docker build/run utilities
+  - `black_box.py`: Pre-encrypted testcase challenges
+  - `white_box.py`: fherma-validator based challenges
+
+Run FHE challenge:
+```bash
+python -u -m MLAgentBench.runner --python $(which python) \
+    --challenge-dir /path/to/fhe_challenge/black_box/challenge_relu \
+    --docker-timeout 600 --docker-build-timeout 300 \
+    --log-dir logs/fhe --work-dir workspace
+```
 
 ### API Keys
 

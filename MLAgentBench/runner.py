@@ -69,6 +69,10 @@ if __name__ == "__main__":
     # langchain configs
     parser.add_argument("--langchain-agent", type=str, default="zero-shot-react-description", help="langchain agent")
 
+    # FHE challenge configs
+    parser.add_argument("--challenge-dir", type=str, default=None, help="path to external FHE challenge directory")
+    parser.add_argument("--docker-timeout", type=int, default=600, help="Docker execution timeout in seconds")
+    parser.add_argument("--docker-build-timeout", type=int, default=300, help="Docker build timeout in seconds")
 
     args = parser.parse_args()
     print(args, file=sys.stderr)
