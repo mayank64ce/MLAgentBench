@@ -1,10 +1,4 @@
 workspace
 openai_api_key.txt
 .env
-<<<<<<< HEAD
 first_test
-
-MLAgentBench.egg-info
-=======
-first_test
->>>>>>> d310f17 (added working environment)
