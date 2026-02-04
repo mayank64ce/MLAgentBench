@@ -1,4 +1,0 @@
-MLAgentBench
-figs
-first_test
-workspace

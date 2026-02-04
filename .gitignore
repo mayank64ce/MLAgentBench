@@ -2,3 +2,5 @@ workspace
 openai_api_key.txt
 .env
 first_test
+
+MLAgentBench.egg-info
