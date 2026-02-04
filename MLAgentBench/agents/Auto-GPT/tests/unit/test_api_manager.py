@@ -39,7 +39,7 @@ class TestApiManager:
         ]
         model = "gpt-3.5-turbo"
 
-        with patch("openai.ChatCompletion.create") as mock_create:
+        with patch("openai.resources.chat.Completions.create") as mock_create:
             mock_response = MagicMock()
             del mock_response.error
             mock_response.usage.prompt_tokens = 10
@@ -56,7 +56,7 @@ class TestApiManager:
         messages = []
         model = "gpt-3.5-turbo"
 
-        with patch("openai.ChatCompletion.create") as mock_create:
+        with patch("openai.resources.chat.Completions.create") as mock_create:
             mock_response = MagicMock()
             del mock_response.error
             mock_response.usage.prompt_tokens = 0
@@ -78,7 +78,7 @@ class TestApiManager:
         ]
         model = "gpt-3.5-turbo"
 
-        with patch("openai.ChatCompletion.create") as mock_create:
+        with patch("openai.resources.chat.Completions.create") as mock_create:
             mock_response = MagicMock()
             del mock_response.error
             mock_response.usage.prompt_tokens = 10
@@ -139,7 +139,7 @@ class TestApiManager:
     @staticmethod
     def test_get_models():
         """Test if getting models works correctly."""
-        with patch("openai.Model.list") as mock_list_models:
+        with patch("openai.resources.Models.list") as mock_list_models:
             mock_list_models.return_value = {"data": [{"id": "gpt-3.5-turbo"}]}
             result = api_manager.get_models()
 

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-import openai
+from openai import OpenAI
+
+client = OpenAI()
 from openai import Model
 
 from autogpt.config import Config
@@ -59,22 +61,18 @@ class ApiManager(metaclass=Singleton):
         if temperature is None:
             temperature = cfg.temperature
         if deployment_id is not None:
-            response = openai.ChatCompletion.create(
-                deployment_id=deployment_id,
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                api_key=cfg.openai_api_key,
-            )
+            response = client.chat.completions.create(deployment_id=deployment_id,
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            api_key=cfg.openai_api_key)
         else:
-            response = openai.ChatCompletion.create(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                api_key=cfg.openai_api_key,
-            )
+            response = client.chat.completions.create(model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            api_key=cfg.openai_api_key)
         if not hasattr(response, "error"):
             logger.debug(f"Response: {response}")
             prompt_tokens = response.usage.prompt_tokens
@@ -140,16 +138,16 @@ class ApiManager(metaclass=Singleton):
                                                 temperature=temperature,
                                                 max_tokens_to_sample=max_tokens,
                                                 log_file = log_file)
-                
+
         except Exception as e:
             print(e)
             return Namespace(**{"error": str(e)})
-        
-            
-        
+
+
+
         with open(log_file, "r") as f:
             content = f.read()
-        
+
         tokens = content.split("===================tokens=====================")[1].strip().split("\n")
         prompt_tokens = int(tokens[0].split(":")[1].strip())
         completion_tokens = int(tokens[1].split(":")[1].strip())
@@ -178,7 +176,7 @@ class ApiManager(metaclass=Singleton):
         response = Namespace(**response)
         logger.debug(f"Response: {response}")
         return response
-    
+
     def update_cost(self, prompt_tokens, completion_tokens, model: str):
         """
         Update the total cost, prompt tokens, and completion tokens.
@@ -256,7 +254,7 @@ class ApiManager(metaclass=Singleton):
 
         """
         if self.models is None:
-            all_models = openai.Model.list()["data"]
+            all_models = client.models.list()["data"]
             self.models = [model for model in all_models if "gpt" in model["id"]]
 
         return self.models + [{"id": "claude-v1"}]

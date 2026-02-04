@@ -5,7 +5,9 @@ import time
 from typing import List, Literal, Optional
 from unittest.mock import patch
 
-import openai
+from openai import OpenAI
+
+client = OpenAI()
 import openai.api_resources.abstract.engine_api_resource as engine_api_resource
 import openai.util
 from colorama import Fore, Style
@@ -172,13 +174,11 @@ def create_text_completion(
     else:
         kwargs = {"model": model}
 
-    response = openai.Completion.create(
-        **kwargs,
-        prompt=prompt,
-        temperature=temperature,
-        max_tokens=max_output_tokens,
-        api_key=cfg.openai_api_key,
-    )
+    response = client.completions.create(**kwargs,
+    prompt=prompt,
+    temperature=temperature,
+    max_tokens=max_output_tokens,
+    api_key=cfg.openai_api_key)
     return response.choices[0].text
 
 

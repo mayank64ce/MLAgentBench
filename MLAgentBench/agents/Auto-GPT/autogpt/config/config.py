@@ -82,14 +82,13 @@ class Config(metaclass=Singleton):
 
         if self.use_azure:
             self.load_azure_config()
-            openai.api_type = self.openai_api_type
-            openai.api_base = self.openai_api_base
-            openai.api_version = self.openai_api_version
+            # TODO: The 'openai.api_base' option isn't read in the client API. You will need to pass it when you instantiate the client, e.g. 'OpenAI(base_url=self.openai_api_base)'
+            # openai.api_base = self.openai_api_base
         elif os.getenv("OPENAI_API_BASE_URL", None):
-            openai.api_base = os.getenv("OPENAI_API_BASE_URL")
 
         if self.openai_organization is not None:
-            openai.organization = self.openai_organization
+            # TODO: The 'openai.organization' option isn't read in the client API. You will need to pass it when you instantiate the client, e.g. 'OpenAI(organization=self.openai_organization)'
+            # openai.organization = self.openai_organization
 
         self.elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY")
         # ELEVENLABS_VOICE_1_ID is deprecated and included for backwards-compatibility
@@ -300,11 +299,11 @@ class Config(metaclass=Singleton):
     def set_memory_backend(self, name: str) -> None:
         """Set the memory backend name."""
         self.memory_backend = name
-        
+
     def set_device(self, value: int) -> None:
         """Set the device value."""
         self.device = value
-    
+
     def set_python_path(self, value: str) -> None:
         """Set the python path value."""
         self.python_path = value

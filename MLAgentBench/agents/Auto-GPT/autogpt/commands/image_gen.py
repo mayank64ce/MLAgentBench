@@ -5,7 +5,9 @@ import time
 import uuid
 from base64 import b64decode
 
-import openai
+from openai import OpenAI
+
+client = OpenAI()
 import requests
 from PIL import Image
 
@@ -125,17 +127,15 @@ def generate_image_with_dalle(
         )
         size = closest
 
-    response = openai.Image.create(
-        prompt=prompt,
-        n=1,
-        size=f"{size}x{size}",
-        response_format="b64_json",
-        api_key=agent.config.openai_api_key,
-    )
+    response = client.images.generate(prompt=prompt,
+    n=1,
+    size=f"{size}x{size}",
+    response_format="b64_json",
+    api_key=agent.config.openai_api_key)
 
     logger.info(f"Image Generated for prompt:{prompt}")
 
-    image_data = b64decode(response["data"][0]["b64_json"])
+    image_data = b64decode(response.data[0].b64_json)
 
     with open(filename, mode="wb") as png:
         png.write(image_data)
@@ -187,7 +187,7 @@ def generate_image_with_sd_webui(
 
     # Save the image to disk
     response = response.json()
-    b64 = b64decode(response["images"][0].split(",", 1)[0])
+    b64 = b64decode(response.images[0].split(",", 1)[0])
     image = Image.open(io.BytesIO(b64))
     image.save(filename)
 

@@ -6,27 +6,24 @@ import time
 from typing import Dict, List, Optional, Tuple, Union, Any
 
 
-from langchain.agents import AgentExecutor
-from langchain.agents import initialize_agent
-from langchain.agents.tools import Tool
+from langchain_classic.agents import AgentExecutor, initialize_agent
+from langchain_classic.agents.mrkl.output_parser import MRKLOutputParser
+from langchain_classic.utils.input import get_color_mapping
+from langchain_core.tools import Tool
 from langchain_anthropic import ChatAnthropic
-from langchain.chat_models.base import BaseChatModel
-from langchain.schema import (
-    AgentAction,
-    AgentFinish,
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.agents import AgentAction, AgentFinish
+from langchain_core.messages import (
     AIMessage,
     BaseMessage,
     ChatMessage,
     FunctionMessage,
     HumanMessage,
     SystemMessage,
-    ChatResult,
-    ChatGeneration
 )
-from langchain.callbacks.manager import CallbackManagerForChainRun
-from langchain.input import get_color_mapping
-from langchain.callbacks import FileCallbackHandler
-from langchain.agents.mrkl.output_parser import MRKLOutputParser
+from langchain_core.outputs import ChatResult, ChatGeneration
+from langchain_core.callbacks import CallbackManagerForChainRun
+from langchain_classic.callbacks import FileCallbackHandler
 from MLAgentBench.schema import Action
 from MLAgentBench.LLM import complete_text_crfm
 from .agent import Agent
@@ -267,7 +264,7 @@ class LangChainAgent(Agent):
 
         # init langchain agents
         if self.args.llm_name.startswith("claude"):
-            llm = ChatAnthropic(model=self.args.llm_name, anthropic_api_key=open("claude_api_key.txt").read().strip(), temperature=0.5, max_tokens_to_sample = 2000)
+            llm = ChatAnthropic(model=self.args.llm_name, anthropic_api_key=open("claude_api_key.txt").read().strip(), temperature=0.5, max_tokens=2000)
             agent_kwargs = {"output_parser": AnthropicOutputParser()}
         elif "/" in self.args.llm_name:
             llm = ChatCRFM(model=self.args.llm_name, temperature=0.5, max_tokens = 2000)
@@ -310,4 +307,3 @@ class LangChainAgent(Agent):
         self.save(os.path.join(self.log_dir , f"agent_{self.iterations}.json"))
 
         return finish_state["output"]
-    
