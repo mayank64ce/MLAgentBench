@@ -246,20 +246,41 @@ def complete_text_crfm(prompt="", stop_sequences = [], model="openai/gpt-4-0314"
 def complete_text_openai(prompt, stop_sequences=[], model="gpt-3.5-turbo", max_tokens_to_sample=500, temperature=0.2, log_file=None, **kwargs):
     """ Call the OpenAI API to complete a prompt."""
     client = OpenAI()
+    is_reasoning_model = model.startswith("o1") or model.startswith("o3") or model.startswith("o4") or model.startswith("gpt-5")
+    is_chat_model = model.startswith("gpt-3.5") or model.startswith("gpt-4") or is_reasoning_model
     raw_request = {
           "model": model,
-          "temperature": temperature,
-          "max_tokens": max_tokens_to_sample,
-          "stop": stop_sequences or None,  # API doesn't like empty list
           **kwargs
     }
-    if model.startswith("gpt-3.5") or model.startswith("gpt-4"):
+    if is_reasoning_model:
+        # Reasoning models use reasoning tokens that count toward max_completion_tokens.
+        # A low budget (e.g. 500) gets entirely consumed by reasoning, leaving
+        # message.content empty. Use a much higher budget to leave room for
+        # both reasoning and visible output.
+        raw_request["max_completion_tokens"] = max(max_tokens_to_sample, 8192)
+    else:
+        raw_request["max_tokens"] = max_tokens_to_sample
+        raw_request["stop"] = stop_sequences or None
+        raw_request["temperature"] = temperature
+    if is_chat_model:
         messages = [{"role": "user", "content": prompt}]
         response = client.chat.completions.create(**{"messages": messages,**raw_request})
         completion = response.choices[0].message.content
     else:
         response = client.completions.create(**{"prompt": prompt,**raw_request})
         completion = response.choices[0].text
+    if completion is None:
+        completion = ""
+    # Reasoning models don't support the stop parameter, so manually
+    # truncate at the first occurrence of any stop sequence to prevent
+    # the model from hallucinating observations in its output.
+    if is_reasoning_model and stop_sequences and completion:
+        earliest = len(completion)
+        for stop_seq in stop_sequences:
+            idx = completion.find(stop_seq)
+            if idx != -1 and idx < earliest:
+                earliest = idx
+        completion = completion[:earliest]
     if log_file is not None:
         log_to_file(log_file, prompt, completion, model, max_tokens_to_sample)
     return completion

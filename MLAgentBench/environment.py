@@ -179,6 +179,13 @@ class Environment:
         else:
             os.makedirs(os.path.join(self.log_dir, "traces"))
 
+        # Save run configuration
+        config_file = os.path.join(self.log_dir, "config.json")
+        config = vars(self.args).copy()
+        config["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(config_file, "w") as f:
+            json.dump(config, f, indent=2, default=str)
+
     def _initialize_task_env(self):
 
         work_dir = self.work_dir
@@ -417,7 +424,7 @@ class Environment:
                 except TooLongPromptError:
                     observation="EnvError: too long input for the tool"
                 except LLMError as e:
-                    observation = "LLMError: " + e.message
+                    observation = "LLMError: " + str(e)
                 except EnvException as e:
                     observation = "EnvError: " + e.message
                 except TypeError as e:

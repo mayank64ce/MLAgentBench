@@ -219,7 +219,7 @@ HIGH_LEVEL_ACTIONS =[
         name="Inspect Script Lines",
         description="Use this to inspect specific part of a python script precisely, or the full content of a short script. The number of lines to display is limited to 100 lines. This is especially helpful when debugging.",
         usage={
-            "script_name": "a valid python script name with relative path to current directory if needed",
+            "script_name": "a valid C++ script name with relative path to current directory if needed",
             "start_line_number": "a valid line number",
             "end_line_number": "a valid line number"
         },

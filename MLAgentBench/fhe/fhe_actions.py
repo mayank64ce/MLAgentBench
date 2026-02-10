@@ -2,14 +2,20 @@
 FHE-specific actions for MLAgentBench.
 
 These actions are registered when running FHE challenges and provide
-Docker-based execution and validation.
+Docker-based execution, validation, and focused eval() code generation.
 """
 
 import os
+import re
+import difflib
+import datetime
+import shutil
 from pathlib import Path
 from functools import wraps
 
 from ..schema import ActionInfo, EnvException
+from ..LLM import complete_text
+from .. import high_level_actions
 
 
 def _get_fhe_context(kwargs):
@@ -20,6 +26,326 @@ def _get_fhe_context(kwargs):
         "work_dir": kwargs.get("work_dir", "."),
         "trace": kwargs.get("trace"),
     }
+
+
+def _extract_template_variables(header_content):
+    """
+    Parse a C++ header file to extract FHE variable names.
+
+    Looks for member variable declarations like:
+        CryptoContext<DCRTPoly> m_cc;
+        Ciphertext<DCRTPoly> m_InputC;
+
+    Returns:
+        dict with keys: 'context', 'inputs', 'output', 'public_key'
+    """
+    result = {
+        'context': 'm_cc',
+        'inputs': ['m_InputC'],
+        'output': 'm_OutputC',
+        'public_key': 'm_PublicKey',
+    }
+
+    if not header_content:
+        return result
+
+    # Extract CryptoContext variable
+    cc_match = re.search(r'CryptoContext<DCRTPoly>\s+(m_\w+)', header_content)
+    if cc_match:
+        result['context'] = cc_match.group(1)
+
+    # Extract Ciphertext member variables
+    ciphertext_vars = re.findall(r'Ciphertext<DCRTPoly>\s+(m_\w+)', header_content)
+    if ciphertext_vars:
+        inputs = []
+        output = None
+        for var in ciphertext_vars:
+            if 'Output' in var or 'output' in var:
+                output = var
+            else:
+                inputs.append(var)
+        if inputs:
+            result['inputs'] = inputs
+        if output:
+            result['output'] = output
+
+    # Extract PublicKey variable
+    pk_match = re.search(r'PublicKey<DCRTPoly>\s+(m_\w+)', header_content)
+    if pk_match:
+        result['public_key'] = pk_match.group(1)
+
+    return result
+
+
+def _extract_eval_body(cpp_content):
+    """
+    Extract the current eval() function body from a C++ source file.
+
+    Uses brace-matching to find the body of void ClassName::eval() { ... }.
+
+    Returns:
+        The body text (stripped), or empty string if eval() is empty/placeholder.
+    """
+    if not cpp_content:
+        return ""
+
+    match = re.search(r'void\s+\w+::eval\s*\(\s*\)\s*\{', cpp_content)
+    if not match:
+        return ""
+
+    start = match.end()
+    depth = 1
+    pos = start
+    while pos < len(cpp_content) and depth > 0:
+        if cpp_content[pos] == '{':
+            depth += 1
+        elif cpp_content[pos] == '}':
+            depth -= 1
+        pos += 1
+
+    if depth != 0:
+        return ""
+
+    body = cpp_content[start:pos - 1].strip()
+
+    # Check if body is just comments or placeholder
+    stripped = re.sub(r'//[^\n]*', '', body).strip()
+    stripped = re.sub(r'/\*.*?\*/', '', stripped, flags=re.DOTALL).strip()
+    if not stripped or stripped.lower() in ('todo', ''):
+        return ""
+
+    return body
+
+
+def _format_variable_docs(template_vars):
+    """
+    Format template variable documentation for the LLM prompt.
+
+    Args:
+        template_vars: dict from _extract_template_variables()
+
+    Returns:
+        Formatted string describing variable names and usage.
+    """
+    lines = [
+        "IMPORTANT - Use these EXACT variable names (class members):",
+        f"  {template_vars['context']}       - CryptoContext<DCRTPoly>",
+    ]
+
+    if len(template_vars['inputs']) == 1:
+        lines.append(f"  {template_vars['inputs'][0]}   - Input Ciphertext<DCRTPoly>")
+    else:
+        for inp in template_vars['inputs']:
+            lines.append(f"  {inp}  - Input Ciphertext<DCRTPoly>")
+
+    lines.extend([
+        f"  {template_vars['output']}  - Output Ciphertext (ASSIGN to this, don't return)",
+        f"  {template_vars['public_key']} - PublicKey<DCRTPoly>",
+        "",
+        f"The eval() function is void - assign result to {template_vars['output']}:",
+        f"  {template_vars['output']} = result;  // CORRECT",
+        "  return result;       // WRONG - eval() is void!",
+    ])
+
+    return "\n".join(lines)
+
+
+EDIT_SCRIPT_MAX_TOKENS = 4000
+
+
+def implement_fhe_eval(edit_instruction, work_dir=".", **kwargs):
+    """
+    Generate or edit the eval() function body for an FHE challenge.
+
+    This action sends only relevant context (challenge spec, variable docs,
+    current eval body) to the LLM and receives only the eval() function body
+    back, rather than sending/receiving the entire file.
+
+    Args:
+        edit_instruction: Description of what the eval() function should implement
+        work_dir: Working directory containing yourSolution.cpp/h
+        **kwargs: Additional context including fhe_spec, fhe_interpreter, log_file
+
+    Returns:
+        Observation string with the generated code diff
+    """
+    fhe_spec = kwargs.get("fhe_spec")
+    interpreter = kwargs.get("fhe_interpreter")
+
+    if fhe_spec is None:
+        raise EnvException("FHE spec not available. This action is only available for FHE challenges.")
+
+    # 1. Read template files from workspace
+    solution_path = Path(work_dir) / "yourSolution.cpp"
+    header_path = Path(work_dir) / "yourSolution.h"
+
+    if not solution_path.exists():
+        raise EnvException("yourSolution.cpp not found in workspace.")
+
+    cpp_content = solution_path.read_text()
+    header_content = header_path.read_text() if header_path.exists() else ""
+
+    # 2. Extract template variables and current eval body
+    template_vars = _extract_template_variables(header_content)
+    current_eval_body = _extract_eval_body(cpp_content)
+    variable_docs = _format_variable_docs(template_vars)
+
+    # 3. Build focused prompt
+    spec = fhe_spec
+    prompt_parts = [
+        "You are an expert in Fully Homomorphic Encryption (FHE).",
+        "Implement the eval() function body for the following challenge.",
+        "",
+        "## Challenge Specification",
+        f"- Task: {spec.task}",
+    ]
+
+    if spec.task_description:
+        prompt_parts.append(f"- Description: {spec.task_description}")
+
+    prompt_parts.extend([
+        f"- Scheme: {spec.scheme.value}",
+        f"- Library: {spec.library.value}",
+        f"- Multiplicative Depth Budget: {spec.constraints.depth}",
+        f"- Batch Size: {spec.constraints.batch_size}",
+        f"- Input Range: [{spec.constraints.input_range[0]}, {spec.constraints.input_range[1]}]",
+        "",
+        "## Available Keys",
+        f"- Public Key: {'Yes' if spec.keys.public else 'No'}",
+        f"- Multiplication Key: {'Yes' if spec.keys.multiplication else 'No'}",
+    ])
+
+    if spec.keys.rotation_indices:
+        prompt_parts.append(f"- Rotation Keys: {spec.keys.rotation_indices}")
+
+    prompt_parts.extend([
+        "",
+        "## Template Variables",
+        variable_docs,
+    ])
+
+    if header_content:
+        prompt_parts.extend([
+            "",
+            "## Template File: yourSolution.h",
+            "```cpp",
+            header_content.strip(),
+            "```",
+        ])
+
+    if current_eval_body:
+        prompt_parts.extend([
+            "",
+            "## Current eval() body:",
+            "```cpp",
+            current_eval_body,
+            "```",
+        ])
+    else:
+        prompt_parts.extend([
+            "",
+            "## Current eval() body:",
+            "```cpp",
+            "// Empty - no implementation yet",
+            "```",
+        ])
+
+    prompt_parts.extend([
+        "",
+        "## Instruction",
+        edit_instruction,
+        "",
+        "## CRITICAL Rules",
+        "- NEVER decrypt inputs or use secret keys",
+        f"- NEVER return from eval() - assign result to {template_vars['output']}",
+        f"- Stay within multiplicative depth budget of {spec.constraints.depth}",
+    ])
+
+    if spec.keys.rotation_indices:
+        prompt_parts.append(f"- Only use rotation indices that are available: {spec.keys.rotation_indices}")
+
+    prompt_parts.extend([
+        "",
+        "## Response Format",
+        "Provide ONLY the eval() function body (no function signature, no braces).",
+        "Start the C++ code with ```cpp and end with ```.",
+    ])
+
+    prompt = "\n".join(prompt_parts)
+
+    # 4. Call LLM
+    completion = complete_text(
+        prompt,
+        log_file=kwargs.get("log_file", os.path.join(work_dir, "implement_fhe_eval.log")),
+        model=high_level_actions.EDIT_SCRIPT_MODEL,
+        max_tokens_to_sample=EDIT_SCRIPT_MAX_TOKENS,
+    )
+
+    # 5. Extract code from response
+    new_code = None
+    if "```cpp" in completion:
+        new_code = completion.split("```cpp")[1].split("```")[0].strip()
+    elif "```c++" in completion:
+        new_code = completion.split("```c++")[1].split("```")[0].strip()
+    elif "```" in completion:
+        new_code = completion.split("```")[1].split("```")[0].strip()
+
+    if not new_code:
+        raise EnvException("LLM did not return valid C++ code in the expected format.")
+
+    # 6. Backup old file
+    backup_name = os.path.join(
+        work_dir, "backup",
+        f"yourSolution.cpp_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    )
+    backup_dir = os.path.join(work_dir, "backup")
+    if not os.path.exists(backup_dir):
+        os.makedirs(backup_dir)
+    shutil.copyfile(str(solution_path), backup_name)
+
+    # 7. Inject code into yourSolution.cpp
+    if interpreter is not None:
+        interpreter._inject_code(solution_path, new_code)
+    else:
+        # Fallback: use the same injection logic directly
+        from .interpreters.base import BaseInterpreter
+        # Read template, do brace-matching injection
+        template = solution_path.read_text()
+        stripped_code = template  # Will be overwritten below
+
+        match = re.search(r'void\s+\w+::eval\s*\(\s*\)\s*\{', template)
+        if match:
+            start = match.end()
+            depth = 1
+            pos = start
+            while pos < len(template) and depth > 0:
+                if template[pos] == '{':
+                    depth += 1
+                elif template[pos] == '}':
+                    depth -= 1
+                pos += 1
+            if depth == 0:
+                stripped_code = template[:start] + '\n' + new_code + '\n' + template[pos - 1:]
+                solution_path.write_text(stripped_code)
+            else:
+                solution_path.write_text(new_code)
+        else:
+            solution_path.write_text(new_code)
+
+    # 8. Generate and return diff
+    new_content = solution_path.read_text()
+    diff = list(difflib.unified_diff(
+        cpp_content.splitlines(keepends=True),
+        new_content.splitlines(keepends=True),
+        fromfile="yourSolution.cpp (before)",
+        tofile="yourSolution.cpp (after)",
+    ))
+    diff_str = "".join(diff)
+
+    return (
+        f"The eval() function has been implemented in yourSolution.cpp. "
+        f"Here is the diff:\n\n{diff_str}"
+    )
 
 
 def execute_fhe_solution(script_name, work_dir=".", **kwargs):
@@ -192,6 +518,21 @@ def understand_fhe_challenge(work_dir=".", **kwargs):
 
 # Define FHE actions
 FHE_ACTIONS = [
+    ActionInfo(
+        name="Implement FHE Eval",
+        description="Generate or edit the eval() function body for the FHE challenge. "
+                    "Provide a description of what the eval function should compute. "
+                    "The LLM will receive challenge constraints, variable documentation, "
+                    "and template context to generate only the eval() body. "
+                    "Use this instead of 'Edit Script (AI)' for FHE C++ challenges.",
+        usage={
+            "edit_instruction": "Description of what the eval() function should implement "
+                               "(e.g., 'implement ReLU using polynomial approximation with depth 10')"
+        },
+        return_value="The generated code and a diff showing changes to yourSolution.cpp.",
+        function=implement_fhe_eval,
+        is_primitive=False
+    ),
     ActionInfo(
         name="Execute FHE Solution",
         description="Execute an FHE solution file via Docker container. "
